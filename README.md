@@ -9,8 +9,10 @@ the browser, entirely locally (no cloud account, no data leaves your machine):
 
 - a **dependency graph visualizer** — modules, controllers and providers, wired
   by their `import` / `declares` / `injects` relationships;
-- a **routes explorer** — every HTTP route your controllers expose, grouped by
-  controller and filterable by path or verb.
+- a **routes explorer** — every entrypoint your controllers expose (HTTP routes
+  _and_ WebSocket handlers), grouped by controller and filterable by path or
+  verb. Click an entrypoint to see its execution flow — the middlewares, guards
+  and filters bound to it.
 
 ![modules → controllers → providers, wired by import / declares / injects edges]
 
@@ -104,7 +106,7 @@ import { AppModule } from './app.module.ts';
 
 const map = buildRouteMap(AppModule, { prefix: '/api' });
 // { prefix: '/api', controllers: RouteController[] }
-// each route: { method, path, handler, sse?, statusCode? }
+// each route: { method, path, handler, kind, bindings, sse?, statusCode? }
 ```
 
 It reconstructs the exact path Danet registers for every handler — controller
@@ -112,6 +114,17 @@ base path + method path + optional global prefix — and reports the HTTP verb
 (`@All` handlers surface as `ALL`), `@SSE` streams and `@HttpCode` status codes.
 Pass `prefix` to match an app-wide base path set with `app.registerBasePath`
 (`setupDevtools` wires this automatically).
+
+It also captures, per entrypoint:
+
+- **`kind`** — `'http'` or `'ws'`. WebSocket controllers
+  (`@WebSocketController`) and their `@OnWebSocketMessage` topics are listed
+  alongside HTTP routes.
+- **`bindings`** — the execution pipeline bound to the route via decorators:
+  `@Middleware` middlewares, `@UseGuard` guards and `@UseFilter` filters, each
+  tagged with its `stage` and whether it's bound at `controller` or `method`
+  scope. (Globally-registered ones live in the injector, not in metadata, so
+  they aren't included.)
 
 ## Visualizer features
 
@@ -124,10 +137,15 @@ Pass `prefix` to match an app-wide base path set with `app.registerBasePath`
 
 **Routes explorer**
 
-- Every route grouped by controller, showing its declaring module and base path.
+- Every entrypoint grouped by controller, showing its declaring module and base
+  path; HTTP routes and WebSocket handlers side by side.
 - Verb-colored badges; path parameters (`:id`) highlighted.
-- Live filtering by path/handler text and by HTTP method.
+- Live filtering by path/handler text and by HTTP method (or `WS`).
 - `SSE` and custom status-code tags surfaced inline.
+- Click an entrypoint to see its **execution-flow graph**:
+  `Middlewares → Guards → Handler → Filters`, with controller-/method-scope
+  bindings labelled — handy for understanding the request lifecycle or
+  troubleshooting why a guard/filter isn't running.
 
 ## Development
 

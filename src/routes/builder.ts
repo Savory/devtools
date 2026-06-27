@@ -4,24 +4,35 @@
  * decorator metadata that `@danet/core` stashes on controllers and their
  * methods.
  *
- * The walk mirrors the framework's own router (see `DanetHTTPRouter` in
- * `@danet/core`): it starts from the entry module, recurses through `imports`,
- * and for every controller reads the `endpoint` / `method` metadata of each
- * handler to reconstruct the exact paths Danet would register. No application
- * boot is required — the map reflects the declared routing, so it can be
- * produced before or after `app.init`.
+ * The walk mirrors the framework's own routers (see `DanetHTTPRouter` and
+ * `WebSocketRouter` in `@danet/core`): it starts from the entry module, recurses
+ * through `imports`, and for every controller reads the routing metadata of each
+ * handler to reconstruct the exact paths Danet would register, plus the
+ * execution pipeline (middlewares, guards, filters) bound to each. No
+ * application boot is required — the map reflects the declared routing, so it
+ * can be produced before or after `app.init`.
  */
 
 import { MetadataHelper } from '@danet/core/metadata';
 import { moduleMetadataKey } from '@danet/core';
 import type { ModuleInput } from '../graph/builder.ts';
-import { RouteController, RouteInfo, RouteMap, RouteMethod } from './types.ts';
+import {
+	BindingScope,
+	EntrypointMethod,
+	RouteBinding,
+	RouteController,
+	RouteInfo,
+	RouteKind,
+	RouteMap,
+} from './types.ts';
 
 // Minimal structural types — kept local so the builder stays decoupled from the
 // exact shape of `@danet/core`'s exported types (mirrors the graph builder). The
 // public `ModuleInput` entry type is shared with the graph builder.
 // deno-lint-ignore no-explicit-any
 type Ctor = new (...args: any[]) => any;
+// deno-lint-ignore no-explicit-any
+type Named = { name?: string } | ((...args: any[]) => unknown);
 
 interface RawModuleMeta {
 	imports?: Array<Ctor | DynamicModuleLike>;
@@ -37,21 +48,34 @@ interface DynamicModuleLike extends RawModuleMeta {
 export interface BuildRouteMapOptions {
 	/**
 	 * The application-wide path prefix (as set via `app.registerBasePath`), so
-	 * the reconstructed paths match what Danet actually serves. Defaults to `''`.
+	 * the reconstructed HTTP paths match what Danet actually serves. Defaults to
+	 * `''`.
 	 */
 	prefix?: string;
 }
 
-// Metadata keys written by `@danet/core`'s controller/method decorators. These
-// are plain string literals in the framework (not exported constants), read here
-// exactly as the router reads them through the shared MetadataHelper registry.
+// Metadata keys written by `@danet/core`'s decorators. Some (guard/filter/
+// middleware) are exported constants in the framework, but — like the router's
+// own `'endpoint'`/`'method'` keys — they are read here as the same plain string
+// literals through the shared MetadataHelper registry, exactly as the framework
+// reads them.
 const ENDPOINT_KEY = 'endpoint';
 const METHOD_KEY = 'method';
 const SSE_KEY = 'SSE';
 const STATUS_KEY = 'status';
+const WS_ENDPOINT_KEY = 'websocket-endpoint';
+const WS_TOPIC_KEY = 'websocket-topic';
+const GUARD_KEY = 'authGuards';
+const FILTER_KEY = 'filterException';
+const MIDDLEWARE_KEY = 'middlewares';
 
 function nameOf(ctor: Ctor | undefined): string {
 	return ctor?.name || 'Anonymous';
+}
+
+function bindingName(value: Named | undefined): string {
+	return (typeof value === 'function' ? value.name : value?.name) ||
+		'Anonymous';
 }
 
 function isDynamicModule(mod: ModuleInput): mod is DynamicModuleLike {
@@ -123,9 +147,18 @@ class RouteMapBuilder {
 		if (this.seenControllers.has(controller)) return;
 		this.seenControllers.add(controller);
 
-		const base = trimSlash(
-			MetadataHelper.getMetadata<string>(ENDPOINT_KEY, controller) ?? '',
+		const wsEndpoint = MetadataHelper.getMetadata<string>(
+			WS_ENDPOINT_KEY,
+			controller,
 		);
+		const kind: RouteKind = wsEndpoint !== undefined ? 'ws' : 'http';
+		const base = trimSlash(
+			(kind === 'ws'
+				? wsEndpoint
+				: MetadataHelper.getMetadata<string>(ENDPOINT_KEY, controller)) ?? '',
+		);
+
+		const controllerBindings = this.bindingsOf(controller, 'controller');
 
 		const routes: RouteInfo[] = [];
 		const proto = controller.prototype;
@@ -135,32 +168,87 @@ class RouteMapBuilder {
 			const fn = (proto as any)[handler];
 			if (typeof fn !== 'function') continue;
 
-			const endpoint = MetadataHelper.getMetadata<string>(ENDPOINT_KEY, fn);
-			const method = MetadataHelper.getMetadata<string>(METHOD_KEY, fn);
-			// A method is a route only if it carries routing metadata; this skips
-			// lifecycle hooks and plain helper methods on the controller.
-			if (endpoint === undefined && method === undefined) continue;
+			const route = kind === 'ws'
+				? this.wsRoute(fn, handler)
+				: this.httpRoute(fn, handler, base);
+			if (!route) continue;
 
-			routes.push({
-				method: (method ?? 'ALL') as RouteMethod,
-				path: this.buildPath(base, trimSlash(endpoint ?? '')),
-				handler,
-				...(MetadataHelper.getMetadata<boolean>(SSE_KEY, fn)
-					? { sse: true }
-					: {}),
-				...(typeof MetadataHelper.getMetadata<number>(STATUS_KEY, fn) ===
-						'number'
-					? { statusCode: MetadataHelper.getMetadata<number>(STATUS_KEY, fn) }
-					: {}),
-			});
+			route.bindings = [
+				...controllerBindings,
+				...this.bindingsOf(fn, 'method'),
+			];
+			routes.push(route);
 		}
 
 		this.controllers.push({
 			controller: nameOf(controller),
+			kind,
 			prefix: base,
 			module: moduleName,
 			routes,
 		});
+	}
+
+	private httpRoute(
+		fn: Named,
+		handler: string,
+		base: string,
+	): RouteInfo | undefined {
+		const endpoint = MetadataHelper.getMetadata<string>(ENDPOINT_KEY, fn);
+		const method = MetadataHelper.getMetadata<string>(METHOD_KEY, fn);
+		// A method is a route only if it carries routing metadata; this skips
+		// lifecycle hooks and plain helper methods on the controller.
+		if (endpoint === undefined && method === undefined) return undefined;
+
+		const status = MetadataHelper.getMetadata<number>(STATUS_KEY, fn);
+		return {
+			method: (method ?? 'ALL') as EntrypointMethod,
+			path: this.buildPath(base, trimSlash(endpoint ?? '')),
+			handler,
+			kind: 'http',
+			bindings: [],
+			...(MetadataHelper.getMetadata<boolean>(SSE_KEY, fn)
+				? { sse: true }
+				: {}),
+			...(typeof status === 'number' ? { statusCode: status } : {}),
+		};
+	}
+
+	private wsRoute(fn: Named, handler: string): RouteInfo | undefined {
+		const topic = MetadataHelper.getMetadata<string>(WS_TOPIC_KEY, fn);
+		if (topic === undefined) return undefined;
+		return {
+			method: 'WS',
+			path: topic,
+			handler,
+			kind: 'ws',
+			bindings: [],
+		};
+	}
+
+	/** Read the middleware/guard/filter bindings declared on a target. */
+	private bindingsOf(target: object, scope: BindingScope): RouteBinding[] {
+		const bindings: RouteBinding[] = [];
+
+		const middlewares = MetadataHelper.getMetadata<Named[]>(
+			MIDDLEWARE_KEY,
+			target,
+		);
+		for (const mw of middlewares ?? []) {
+			bindings.push({ name: bindingName(mw), stage: 'middleware', scope });
+		}
+
+		const guard = MetadataHelper.getMetadata<Named>(GUARD_KEY, target);
+		if (guard) {
+			bindings.push({ name: bindingName(guard), stage: 'guard', scope });
+		}
+
+		const filter = MetadataHelper.getMetadata<Named>(FILTER_KEY, target);
+		if (filter) {
+			bindings.push({ name: bindingName(filter), stage: 'filter', scope });
+		}
+
+		return bindings;
 	}
 
 	/** Assemble a full path the same way `DanetHTTPRouter.createRoute` does. */
@@ -185,7 +273,7 @@ class RouteMapBuilder {
  * const app = new DanetApplication();
  * await app.init(AppModule);
  * const map = buildRouteMap(app.entryModule);
- * console.log(map.controllers.flatMap((c) => c.routes).length, 'routes');
+ * console.log(map.controllers.flatMap((c) => c.routes).length, 'entrypoints');
  * ```
  */
 export function buildRouteMap(

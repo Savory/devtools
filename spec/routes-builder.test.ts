@@ -1,14 +1,25 @@
 import { assert, assertEquals } from '@std/assert';
 import {
 	All,
+	type AuthGuard,
 	Controller,
+	type DanetMiddleware,
 	Delete,
+	type ExceptionFilter,
+	type ExecutionContext,
 	Get,
 	HttpCode,
+	type HttpContext,
 	Injectable,
+	Middleware,
 	Module,
+	type NextFunction,
+	OnWebSocketMessage,
 	Post,
 	SSE,
+	UseFilter,
+	UseGuard,
+	WebSocketController,
 } from '@danet/core';
 import { buildRouteMap } from '../mod.ts';
 import type { RouteInfo } from '../src/routes/mod.ts';
@@ -75,6 +86,58 @@ class CatModule {}
 	controllers: [RootController],
 })
 class AppModule {}
+
+class TraceMiddleware implements DanetMiddleware {
+	async action(_ctx: ExecutionContext, next: NextFunction): Promise<void> {
+		await next();
+	}
+}
+
+class RolesGuard implements AuthGuard {
+	canActivate(_ctx: ExecutionContext): boolean {
+		return true;
+	}
+}
+
+class ErrorFilter implements ExceptionFilter {
+	catch(_error: unknown, _ctx: HttpContext): undefined {
+		return undefined;
+	}
+}
+
+@Middleware(TraceMiddleware)
+@UseGuard(RolesGuard)
+@Controller('admin')
+class AdminController {
+	@Get('')
+	dashboard(): string {
+		return 'dash';
+	}
+
+	@UseFilter(ErrorFilter)
+	@Delete(':id')
+	purge(): string {
+		return 'purged';
+	}
+}
+
+@WebSocketController('chat')
+class ChatGateway {
+	@OnWebSocketMessage('message')
+	onMessage(): { topic: string; data: string } {
+		return { topic: 'message', data: 'ok' };
+	}
+
+	@OnWebSocketMessage('typing')
+	onTyping(): { topic: string; data: string } {
+		return { topic: 'typing', data: 'ok' };
+	}
+}
+
+@Module({
+	controllers: [AdminController, ChatGateway],
+})
+class PipelineModule {}
 
 function routeOf(
 	map: ReturnType<typeof buildRouteMap>,
@@ -143,4 +206,44 @@ Deno.test('buildRouteMap applies a global prefix to every path', () => {
 	assertEquals(routeOf(map, 'CatController', 'list').path, '/api/cats');
 	assertEquals(routeOf(map, 'CatController', 'getOne').path, '/api/cats/:id');
 	assertEquals(routeOf(map, 'RootController', 'health').path, '/api/health');
+});
+
+Deno.test('buildRouteMap captures controller- and method-level pipeline bindings', () => {
+	const map = buildRouteMap(PipelineModule);
+
+	// Controller-level middleware + guard apply to every route.
+	const dashboard = routeOf(map, 'AdminController', 'dashboard');
+	assertEquals(dashboard.bindings, [
+		{ name: 'TraceMiddleware', stage: 'middleware', scope: 'controller' },
+		{ name: 'RolesGuard', stage: 'guard', scope: 'controller' },
+	]);
+
+	// The method-level filter is appended after the inherited controller bindings.
+	const purge = routeOf(map, 'AdminController', 'purge');
+	assertEquals(purge.bindings, [
+		{ name: 'TraceMiddleware', stage: 'middleware', scope: 'controller' },
+		{ name: 'RolesGuard', stage: 'guard', scope: 'controller' },
+		{ name: 'ErrorFilter', stage: 'filter', scope: 'method' },
+	]);
+});
+
+Deno.test('buildRouteMap maps WebSocket controllers and message topics', () => {
+	const map = buildRouteMap(PipelineModule);
+	const chat = map.controllers.find((c) => c.controller === 'ChatGateway')!;
+
+	assertEquals(chat.kind, 'ws');
+	assertEquals(chat.prefix, 'chat');
+	assertEquals(chat.routes.length, 2);
+
+	const message = routeOf(map, 'ChatGateway', 'onMessage');
+	assertEquals(message.kind, 'ws');
+	assertEquals(message.method, 'WS');
+	assertEquals(message.path, 'message');
+});
+
+Deno.test('buildRouteMap marks HTTP routes with kind "http"', () => {
+	const map = buildRouteMap(AppModule);
+	assertEquals(routeOf(map, 'CatController', 'list').kind, 'http');
+	const cats = map.controllers.find((c) => c.controller === 'CatController')!;
+	assertEquals(cats.kind, 'http');
 });

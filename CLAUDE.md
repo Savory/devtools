@@ -12,7 +12,9 @@ features today:
 
 - a **dependency graph visualizer** — modules, controllers and providers and
   their `import` / `declares` / `injects` wiring;
-- a **routes explorer** — every HTTP route, grouped by controller.
+- a **routes explorer** — every entrypoint (HTTP routes + WebSocket handlers),
+  grouped by controller, with a per-route execution-flow graph (middlewares /
+  guards / filters).
 
 Deno only, published to [JSR](https://jsr.io/@danet/devtools). It depends on
 `@danet/core` (peer-style, pulled from JSR).
@@ -68,15 +70,27 @@ mount and a cross-linked UI shell.
     the shared `ModuleInput` entry-point type (reused by the routes builder).
   - `mod.ts` — barrel.
 - **`src/routes/`** — route-map extraction, also a pure metadata walk.
-  - `types.ts` — the data model: `RouteInfo` (`method`, `path`, `handler`,
-    optional `sse` / `statusCode`), `RouteController` (groups a controller's
-    routes + its declaring `module` and base `prefix`), `RouteMap`.
-  - `builder.ts` — `buildRouteMap(entryModule, { prefix })`. Walks modules,
-    reads each controller's `endpoint` metadata and each handler's `endpoint` /
-    `method` / `SSE` / `status` metadata, and **reconstructs the exact path**
-    `DanetHTTPRouter.createRoute` would register (`trimSlash` join + optional
-    global prefix). A handler counts as a route only if it carries `endpoint` or
-    `method` metadata, so lifecycle hooks / helpers are skipped.
+  - `types.ts` — the data model: `RouteInfo` (`method` incl. `WS`, `path`,
+    `handler`, `kind` `http`/`ws`, `bindings`, optional `sse` / `statusCode`),
+    `RouteBinding` (`name`, `stage` middleware/guard/filter, `scope`
+    controller/method), `RouteController` (groups a controller's routes + its
+    declaring `module`, base `prefix` and `kind`), `RouteMap`.
+  - `builder.ts` — `buildRouteMap(entryModule, { prefix })`. Walks modules and,
+    per controller:
+    - **HTTP** controllers (`endpoint` metadata): reads each handler's
+      `endpoint` / `method` / `SSE` / `status` and **reconstructs the exact
+      path** `DanetHTTPRouter.createRoute` would register (`trimSlash` join +
+      optional global prefix). A handler counts as a route only if it carries
+      `endpoint` or `method` metadata, so lifecycle hooks / helpers are skipped.
+    - **WebSocket** controllers (`websocket-endpoint` metadata): lists each
+      `websocket-topic` handler as a `kind: 'ws'`, `method: 'WS'` entrypoint
+      whose `path` is the message topic (mirrors `WebSocketRouter`).
+    - **bindings**: reads `middlewares` / `authGuards` / `filterException`
+      metadata at controller and method scope and records the route's pipeline
+      (controller-scope bindings before method-scope, in middleware→guard→filter
+      order). Globally-registered middleware/guards/filters live in the
+      injector, not in metadata, so they aren't (and can't be) introspected
+      here.
   - `mod.ts` — barrel.
 - **`src/server/`** — the HTTP-served visualizers.
   - `devtools.ts` — `setupDevtools(app, { path })`. Registers **four** routes on
@@ -88,7 +102,10 @@ mount and a cross-linked UI shell.
     route map reads the global prefix from `app.httpRouter.prefix`.
   - `ui.ts` — `renderUI(basePath)`: the graph page (Cytoscape.js from a CDN).
   - `routes-ui.ts` — `renderRoutesUI(basePath)`: the routes explorer page — a
-    controller-grouped, filterable (by text + HTTP verb) table. No CDN deps.
+    controller-grouped, filterable (by text + HTTP verb) entrypoint list on the
+    left; clicking a row renders that route's execution-flow graph
+    (`Middlewares → Guards → Handler → Filters`) on the right. NestJS-inspired
+    verb palette. No CDN deps.
   - Both pages are self-contained HTML strings with inlined styles/interactions
     (no build step) and a shared nav linking the two views.
   - `mod.ts` — barrel.
@@ -103,10 +120,12 @@ import `@dx/reflect` directly, so the same registry is shared. Local structural
 types (`Ctor`, provider shapes) keep the builder decoupled from the exact
 exported `@danet/core` types.
 
-The routes builder reads the same way, but the controller/method routing keys
-(`'endpoint'`, `'method'`, `'SSE'`, `'status'`) are **plain string literals** in
-`@danet/core` (not exported constants), so they're read as literals through
-`MetadataHelper` — exactly as the framework's own router reads them.
+The routes builder reads the same way. The routing keys it uses (`'endpoint'`,
+`'method'`, `'SSE'`, `'status'`, `'websocket-endpoint'`, `'websocket-topic'`)
+are **plain string literals** in `@danet/core`, and the pipeline keys
+(`'middlewares'`, `'authGuards'`, `'filterException'`) are exported constants —
+but all are read as the same literals through `MetadataHelper`, exactly as the
+framework's own routers and executors read them.
 
 ### Conventions
 
@@ -127,8 +146,10 @@ using native `Deno.test` with `@std/assert`. Two styles:
   and cross-module/token injection.
 - `spec/routes-builder.test.ts` — unit-tests `buildRouteMap` against in-file
   fixtures, asserting reconstructed paths, verbs (incl. `@All`/`@SSE`),
-  `@HttpCode` status, the global-prefix option, and that non-route methods are
-  skipped.
+  `@HttpCode` status, the global-prefix option, controller-/method-scope
+  pipeline `bindings` (`@Middleware`/`@UseGuard`/`@UseFilter`), WebSocket
+  entrypoints (`@WebSocketController`/`@OnWebSocketMessage`), and that non-route
+  methods are skipped.
 - `spec/devtools.test.ts` — boots a real `DanetApplication`, calls
   `setupDevtools`, `app.listen(0)`, hits the routes over `fetch`, then
   `app.close()`. Follow this pattern (random port, always clean up).

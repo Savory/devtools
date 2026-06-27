@@ -1,6 +1,8 @@
 /**
- * Example app that boots Danet, mounts the devtools and serves the dependency
- * graph visualizer. Run with:
+ * Example app that boots Danet, mounts the devtools and serves both the
+ * dependency graph visualizer and the routes explorer. It wires up middleware,
+ * a guard, an exception filter and a WebSocket gateway so the routes explorer's
+ * execution-flow graph has something to show. Run with:
  *
  * ```bash
  * deno task start:example
@@ -9,19 +11,50 @@
  */
 
 import {
+	type AuthGuard,
+	Catch,
 	Controller,
 	DanetApplication,
+	type DanetMiddleware,
 	Delete,
+	type ExceptionFilter,
+	type ExecutionContext,
 	Get,
 	HttpCode,
+	type HttpContext,
 	Inject,
 	Injectable,
+	Middleware,
 	Module,
+	type NextFunction,
+	OnWebSocketMessage,
 	Post,
 	Put,
 	SCOPE,
+	UseFilter,
+	UseGuard,
+	WebSocketController,
 } from '@danet/core';
 import { setupDevtools } from '../mod.ts';
+
+class LoggingMiddleware implements DanetMiddleware {
+	async action(_ctx: ExecutionContext, next: NextFunction): Promise<void> {
+		await next();
+	}
+}
+
+class ApiKeyGuard implements AuthGuard {
+	canActivate(_ctx: ExecutionContext): boolean {
+		return true;
+	}
+}
+
+@Catch(Error)
+class HttpExceptionFilter implements ExceptionFilter {
+	catch(_error: unknown, ctx: HttpContext): Response {
+		return ctx.json({ error: 'Something went wrong' }, 500);
+	}
+}
 
 @Injectable()
 class ConfigService {
@@ -56,6 +89,10 @@ class UserService {
 	}
 }
 
+// Controller-level middleware + guard apply to every route below; the method
+// level @UseFilter only applies to `remove`.
+@Middleware(LoggingMiddleware)
+@UseGuard(ApiKeyGuard)
 @Controller('users')
 class UserController {
 	constructor(
@@ -85,9 +122,23 @@ class UserController {
 		return 'updated';
 	}
 
+	@UseFilter(HttpExceptionFilter)
 	@Delete(':id')
 	remove(): string {
 		return 'removed';
+	}
+}
+
+@WebSocketController('chat')
+class ChatGateway {
+	@OnWebSocketMessage('message')
+	onMessage(): { topic: string; data: string } {
+		return { topic: 'message', data: 'received' };
+	}
+
+	@OnWebSocketMessage('typing')
+	onTyping(): { topic: string; data: string } {
+		return { topic: 'typing', data: 'ack' };
 	}
 }
 
@@ -98,7 +149,7 @@ class CoreModule {}
 
 @Module({
 	imports: [CoreModule],
-	controllers: [UserController],
+	controllers: [UserController, ChatGateway],
 	injectables: [
 		{ token: 'CONFIG_TOKEN', useValue: 'super-secret' },
 		UserService,
