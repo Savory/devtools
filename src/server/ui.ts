@@ -39,6 +39,10 @@ export function renderUI(basePath: string): string {
 	#app { display: flex; flex-direction: column; height: 100%; }
 	header { display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel); }
 	header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+	header nav { display: flex; gap: 4px; }
+	header nav a { color: var(--muted); text-decoration: none; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }
+	header nav a:hover { color: var(--text); border-color: var(--border); }
+	header nav a.active { color: var(--text); background: var(--bg); border-color: var(--border); }
 	header .spacer { flex: 1; }
 	header input, header select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
 	header input { width: 220px; }
@@ -64,6 +68,10 @@ export function renderUI(basePath: string): string {
 <div id="app">
 	<header>
 		<h1>🕸️ Danet Devtools</h1>
+		<nav>
+			<a href="${basePath}" class="active">Dependency Graph</a>
+			<a href="${basePath}/routes">Routes</a>
+		</nav>
 		<span class="stat" id="stat"></span>
 		<span class="spacer"></span>
 		<input id="search" type="search" placeholder="Filter nodes…" />

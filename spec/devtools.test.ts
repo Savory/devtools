@@ -63,6 +63,31 @@ Deno.test('setupDevtools serves UI and graph', async (t) => {
 		assert(graph.edges.length > 0);
 	});
 
+	await t.step('returns the resolved routes paths', () => {
+		assertEquals(handle.routesPath, '/_devtools/routes');
+		assertEquals(handle.routesJsonPath, '/_devtools/routes.json');
+	});
+
+	await t.step('serves the routes explorer HTML', async () => {
+		const res = await fetch(`${base}/_devtools/routes`);
+		const body = await res.text();
+		assertEquals(res.status, 200);
+		assertStringIncludes(body, 'Danet Devtools');
+		assertStringIncludes(body, '/_devtools/routes.json');
+	});
+
+	await t.step('serves the route map JSON', async () => {
+		const res = await fetch(`${base}/_devtools/routes.json`);
+		const map = await res.json();
+		assertEquals(res.status, 200);
+		const greet = map.controllers.find(
+			(c: { controller: string }) => c.controller === 'GreetingController',
+		);
+		assert(greet, 'GreetingController missing from route map');
+		assertEquals(greet.routes[0].method, 'GET');
+		assertEquals(greet.routes[0].path, '/greet');
+	});
+
 	await app.close();
 });
 

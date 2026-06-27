@@ -4,7 +4,8 @@
 	"license": "MIT",
 	"exports": {
 		".": "./mod.ts",
-		"./graph": "./src/graph/mod.ts"
+		"./graph": "./src/graph/mod.ts",
+		"./routes": "./src/routes/mod.ts"
 	},
 	"lint": {
 		"include": [

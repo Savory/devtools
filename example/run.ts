@@ -11,10 +11,14 @@
 import {
 	Controller,
 	DanetApplication,
+	Delete,
 	Get,
+	HttpCode,
 	Inject,
 	Injectable,
 	Module,
+	Post,
+	Put,
 	SCOPE,
 } from '@danet/core';
 import { setupDevtools } from '../mod.ts';
@@ -64,6 +68,27 @@ class UserController {
 		this.logger.log('listing users');
 		return this.users.findAll();
 	}
+
+	@Get(':id')
+	getOne(): string {
+		return this.users.findAll();
+	}
+
+	@Post('')
+	@HttpCode(201)
+	create(): string {
+		return 'created';
+	}
+
+	@Put(':id')
+	update(): string {
+		return 'updated';
+	}
+
+	@Delete(':id')
+	remove(): string {
+		return 'removed';
+	}
 }
 
 @Module({
@@ -85,11 +110,12 @@ class AppModule {}
 const app = new DanetApplication();
 await app.init(AppModule);
 
-const { path } = setupDevtools(app);
+const { path, routesPath } = setupDevtools(app);
 
 let port = Number(Deno.env.get('PORT'));
 if (isNaN(port)) {
 	port = 3000;
 }
 await app.listen(port);
-console.log(`Devtools available at http://localhost:${port}${path}`);
+console.log(`Dependency graph at http://localhost:${port}${path}`);
+console.log(`Routes explorer  at http://localhost:${port}${routesPath}`);

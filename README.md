@@ -3,11 +3,14 @@
 Developer tooling for [Danet](https://danet.land), the NestJS-inspired backend
 framework for Deno.
 
-The first feature is a **dependency graph visualizer** — inspired by
-[NestJS Devtools](https://docs.nestjs.com/devtools/overview). It introspects
-your application's modules, controllers and providers and serves an interactive
-graph you can explore in the browser, entirely locally (no cloud account, no
-data leaves your machine).
+Inspired by [NestJS Devtools](https://docs.nestjs.com/devtools/overview), it
+introspects your application and serves interactive tooling you can explore in
+the browser, entirely locally (no cloud account, no data leaves your machine):
+
+- a **dependency graph visualizer** — modules, controllers and providers, wired
+  by their `import` / `declares` / `injects` relationships;
+- a **routes explorer** — every HTTP route your controllers expose, grouped by
+  controller and filterable by path or verb.
 
 ![modules → controllers → providers, wired by import / declares / injects edges]
 
@@ -38,10 +41,12 @@ await app.init(AppModule);
 setupDevtools(app); // mounts GET /_devtools
 
 await app.listen(3000);
-// open http://localhost:3000/_devtools
+// dependency graph: http://localhost:3000/_devtools
+// routes explorer:  http://localhost:3000/_devtools/routes
 ```
 
-Then open `http://localhost:3000/_devtools`.
+Then open `http://localhost:3000/_devtools` and use the nav to switch between
+the **Dependency Graph** and **Routes** views.
 
 ### Options
 
@@ -49,14 +54,16 @@ Then open `http://localhost:3000/_devtools`.
 setupDevtools(app, { path: '/_devtools' });
 ```
 
-| Option | Default        | Description                                    |
-| ------ | -------------- | ---------------------------------------------- |
-| `path` | `'/_devtools'` | Base path for the UI and the JSON graph route. |
+| Option | Default        | Description                                  |
+| ------ | -------------- | -------------------------------------------- |
+| `path` | `'/_devtools'` | Base path for the UIs and their JSON routes. |
 
-Two routes are registered:
+Four routes are registered:
 
-- `GET {path}` — the interactive graph UI.
+- `GET {path}` — the interactive dependency graph UI.
 - `GET {path}/graph.json` — the raw graph as JSON.
+- `GET {path}/routes` — the routes explorer UI.
+- `GET {path}/routes.json` — the raw route map as JSON.
 
 > Tip: only call `setupDevtools` in development, e.g.
 > `if (Deno.env.get('NODE_ENV') !== 'production') setupDevtools(app);`
@@ -86,12 +93,41 @@ The walk mirrors the framework's own bootstrap: it starts at the entry module,
 recurses through `imports`, and reads constructor `design:paramtypes` plus
 `@Inject(token)` metadata to discover injection edges.
 
+## The routes, without the server
+
+The route map is likewise pure metadata introspection — handy for snapshotting
+your API surface or diffing it in CI:
+
+```typescript
+import { buildRouteMap } from '@danet/devtools/routes';
+import { AppModule } from './app.module.ts';
+
+const map = buildRouteMap(AppModule, { prefix: '/api' });
+// { prefix: '/api', controllers: RouteController[] }
+// each route: { method, path, handler, sse?, statusCode? }
+```
+
+It reconstructs the exact path Danet registers for every handler — controller
+base path + method path + optional global prefix — and reports the HTTP verb
+(`@All` handlers surface as `ALL`), `@SSE` streams and `@HttpCode` status codes.
+Pass `prefix` to match an app-wide base path set with `app.registerBasePath`
+(`setupDevtools` wires this automatically).
+
 ## Visualizer features
+
+**Dependency graph**
 
 - Color-coded nodes (modules, controllers, providers) with distinct shapes.
 - Request-/transient-scoped providers are outlined so non-singletons stand out.
 - Click a node to inspect it and highlight its immediate neighborhood.
 - Filter nodes, switch layouts (force / hierarchy / concentric / grid), fit.
+
+**Routes explorer**
+
+- Every route grouped by controller, showing its declaring module and base path.
+- Verb-colored badges; path parameters (`:id`) highlighted.
+- Live filtering by path/handler text and by HTTP method.
+- `SSE` and custom status-code tags surfaced inline.
 
 ## Development
 

@@ -20,4 +20,5 @@
  */
 
 export * from './src/graph/mod.ts';
+export * from './src/routes/mod.ts';
 export * from './src/server/mod.ts';
