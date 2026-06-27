@@ -1,0 +1,47 @@
+{
+	"name": "@danet/devtools",
+	"version": "0.1.0",
+	"license": "MIT",
+	"exports": {
+		".": "./mod.ts",
+		"./graph": "./src/graph/mod.ts"
+	},
+	"lint": {
+		"include": [
+			"src/"
+		],
+		"exclude": [
+			"node_modules/",
+			"./**/*.test.ts"
+		],
+		"rules": {
+			"tags": [
+				"recommended"
+			]
+		}
+	},
+	"fmt": {
+		"options": {
+			"singleQuote": true,
+			"useTabs": true
+		},
+		"exclude": [
+			"./node_modules/",
+			"./coverage/"
+		]
+	},
+	"compilerOptions": {
+		"emitDecoratorMetadata": true,
+		"experimentalDecorators": true
+	},
+	"tasks": {
+		"test": "deno test -A --unstable-kv --unstable-cron spec/**/*.test.ts",
+		"start:example": "deno run --allow-net --allow-env --watch example/run.ts"
+	},
+	"imports": {
+		"@danet/core": "jsr:@danet/core@^2.11.0",
+		"@danet/core/metadata": "jsr:@danet/core@^2.11.0/metadata",
+		"@hono/hono": "jsr:@hono/hono@4.6.3",
+		"@std/assert": "jsr:@std/assert@^1.0.0"
+	}
+}
