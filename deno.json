@@ -43,5 +43,15 @@
 		"@danet/core/metadata": "jsr:@danet/core@^2.11.0/metadata",
 		"@hono/hono": "jsr:@hono/hono@4.6.3",
 		"@std/assert": "jsr:@std/assert@^1.0.0"
+	},
+	"publish": {
+		"exclude": [
+			"./coverage/",
+			"./spec",
+			"./example",
+			".github",
+			".vscode",
+			".idea"
+		]
 	}
 }
